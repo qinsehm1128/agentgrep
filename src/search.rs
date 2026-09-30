@@ -1947,7 +1947,13 @@ mod tests {
     fn glob_semantics_match_rg_dash_g() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join("src/sub")).unwrap();
-        for name in ["main.rs", "notes.log", "src/main.rs", "src/lib.rs", "src/sub/deep.rs"] {
+        for name in [
+            "main.rs",
+            "notes.log",
+            "src/main.rs",
+            "src/lib.rs",
+            "src/sub/deep.rs",
+        ] {
             fs::write(dir.path().join(name), "needle_glob\n").unwrap();
         }
 
@@ -1959,8 +1965,7 @@ mod tests {
                 native.files.iter().map(|f| f.path.clone()).collect();
             native_paths.sort();
             if let Some(rg) = run_grep_with_rg(dir.path(), &args).unwrap() {
-                let mut rg_paths: Vec<String> =
-                    rg.files.iter().map(|f| f.path.clone()).collect();
+                let mut rg_paths: Vec<String> = rg.files.iter().map(|f| f.path.clone()).collect();
                 rg_paths.sort();
                 assert_eq!(
                     native_paths, rg_paths,
@@ -1999,8 +2004,7 @@ mod tests {
         args.glob = Some("src/*".to_string());
 
         let native = run_grep_native(dir.path(), &args).unwrap();
-        let mut native_paths: Vec<String> =
-            native.files.iter().map(|f| f.path.clone()).collect();
+        let mut native_paths: Vec<String> = native.files.iter().map(|f| f.path.clone()).collect();
         native_paths.sort();
         assert_eq!(native_paths, vec!["src/inner.rs"]);
 

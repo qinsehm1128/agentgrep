@@ -360,4 +360,3 @@ fn walker_display_matches_direct_function_for_literal_fffd_names() {
             .any(|i| i.label == "solo_literal")
     );
 }
-
