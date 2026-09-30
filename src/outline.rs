@@ -486,6 +486,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
 
         let dir = tempdir().unwrap();
+        crate::skip_unless_non_utf8_fs!(dir.path());
         let body = (0..12)
             .map(|i| format!("def f{i}():\n    return {i}\n"))
             .collect::<String>();

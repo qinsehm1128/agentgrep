@@ -24,6 +24,21 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use tempfile::tempdir;
 
+/// APFS (macOS) rejects non-UTF-8 file names with EILSEQ; skip there.
+fn non_utf8_names_supported() -> bool {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join(OsStr::from_bytes(b"probe-\xff")), b"").is_ok()
+}
+
+macro_rules! skip_unless_non_utf8_fs {
+    () => {
+        if !non_utf8_names_supported() {
+            eprintln!("skipped: filesystem rejects non-UTF-8 file names");
+            return;
+        }
+    };
+}
+
 fn display_for(raw: &[u8]) -> String {
     let lossy = String::from_utf8_lossy(raw).into_owned();
     let non_utf8 = std::str::from_utf8(raw).is_err();
@@ -76,6 +91,7 @@ fn find_args(parts: &[&str]) -> FindArgs {
 /// scheme must keep their displays distinct.
 #[test]
 fn literal_fffd_and_invalid_byte_interleavings_stay_distinct() {
+    skip_unless_non_utf8_fs!();
     // a, 0xff, literal U+FFFD (ef bf bd), .txt
     let raw1: &[u8] = b"a\xff\xef\xbf\xbd.txt";
     // a, literal U+FFFD, 0xff, .txt
@@ -95,6 +111,7 @@ fn literal_fffd_and_invalid_byte_interleavings_stay_distinct() {
 /// lossy-decodes to the same string.
 #[test]
 fn literal_fffd_name_and_lossy_collider_stay_distinct() {
+    skip_unless_non_utf8_fs!();
     let literal: &[u8] = "a\u{FFFD}.txt".as_bytes();
     let collider: &[u8] = b"a\xff.txt";
     assert_eq!(
@@ -109,6 +126,7 @@ fn literal_fffd_name_and_lossy_collider_stay_distinct() {
 /// must not share a display with the non-UTF-8 file it mimics.
 #[test]
 fn hash_b_decoy_display_does_not_collide() {
+    skip_unless_non_utf8_fs!();
     let collider: &[u8] = b"a\xff.txt";
     let decoy: &[u8] = "a\u{FFFD}.txt#b=ff".as_bytes();
     let collider_display = display_for(collider);
@@ -125,6 +143,7 @@ fn hash_b_decoy_display_does_not_collide() {
 /// must resolve each display to exactly its own file.
 #[test]
 fn combined_decoys_are_separately_addressable_in_all_modes() {
+    skip_unless_non_utf8_fs!();
     let dir = tempdir().unwrap();
     let root = dir.path();
     let collider: &[u8] = b"a\xff.rs";
@@ -251,6 +270,7 @@ impl Lcg {
 /// back to exactly its own file.
 #[test]
 fn fuzz_random_byte_names_have_injective_resolvable_displays() {
+    skip_unless_non_utf8_fs!();
     // Fragments rather than single bytes so truncated multibyte sequences
     // and full U+FFFD encodings appear frequently.
     let fragments: &[&[u8]] = &[
@@ -279,7 +299,7 @@ fn fuzz_random_byte_names_have_injective_resolvable_displays() {
         let mut name = Vec::new();
         let parts = 1 + (rng.next() as usize) % 5;
         for _ in 0..parts {
-            name.extend_from_slice(rng.pick(fragments));
+            name.extend_from_slice(rng.pick::<&[u8]>(fragments));
         }
         name.extend_from_slice(b".rs");
         // Filesystem constraints: no '/', no NUL (alphabet already avoids
@@ -341,6 +361,7 @@ fn fuzz_random_byte_names_have_injective_resolvable_displays() {
 /// display seen in results is the one outline accepts.
 #[test]
 fn walker_display_matches_direct_function_for_literal_fffd_names() {
+    skip_unless_non_utf8_fs!();
     let dir = tempdir().unwrap();
     let root = dir.path();
     let name = "solo\u{FFFD}.rs";

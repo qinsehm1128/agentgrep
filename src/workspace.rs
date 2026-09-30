@@ -350,6 +350,7 @@ mod tests {
         use tempfile::tempdir;
 
         let names: [&[u8]; 4] = [b"a\xff.rs", b"a\xfe.rs", b"zz.rs", b"aa.rs"];
+        crate::skip_unless_non_utf8_fs!(tempdir().unwrap().path());
 
         let make_corpus = |order: &[&[u8]]| {
             let dir = tempdir().unwrap();
@@ -403,6 +404,7 @@ mod tests {
         use tempfile::tempdir;
 
         let dir = tempdir().unwrap();
+        crate::skip_unless_non_utf8_fs!(dir.path());
         for name in [
             b"a\xff.txt".as_slice(),
             b"a\xfe.txt",

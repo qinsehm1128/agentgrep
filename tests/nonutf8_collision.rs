@@ -27,6 +27,21 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use tempfile::{TempDir, tempdir};
 
+/// APFS (macOS) rejects non-UTF-8 file names with EILSEQ; skip there.
+fn non_utf8_names_supported() -> bool {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join(OsStr::from_bytes(b"probe-\xff")), b"").is_ok()
+}
+
+macro_rules! skip_unless_non_utf8_fs {
+    () => {
+        if !non_utf8_names_supported() {
+            eprintln!("skipped: filesystem rejects non-UTF-8 file names");
+            return;
+        }
+    };
+}
+
 const FF_NAME: &[u8] = b"collide\xff.rs";
 const FE_NAME: &[u8] = b"collide\xfe.rs";
 const FF_DISPLAY: &str = "collide\u{FFFD}.rs#b=ff";
@@ -127,6 +142,7 @@ fn assert_unique<'a>(paths: impl Iterator<Item = &'a str>, mode: &str) {
 
 #[test]
 fn grep_emits_unique_display_paths_and_path_bytes_for_colliders() {
+    skip_unless_non_utf8_fs!();
     let dir = collision_corpus(true);
     let result = run_grep(dir.path(), &grep_args("needle_xyz")).unwrap();
 
@@ -164,6 +180,7 @@ fn grep_emits_unique_display_paths_and_path_bytes_for_colliders() {
 
 #[test]
 fn grep_paths_only_emits_unique_display_paths() {
+    skip_unless_non_utf8_fs!();
     let dir = collision_corpus(true);
     let mut args = grep_args("needle_xyz");
     args.paths_only = true;
@@ -178,6 +195,7 @@ fn grep_paths_only_emits_unique_display_paths() {
 
 #[test]
 fn find_emits_unique_display_paths_for_colliders() {
+    skip_unless_non_utf8_fs!();
     let dir = collision_corpus(true);
     let result = run_find(dir.path(), &find_args(&["collide"]));
 
@@ -197,6 +215,7 @@ fn find_emits_unique_display_paths_for_colliders() {
 
 #[test]
 fn trace_emits_unique_display_paths_for_colliders() {
+    skip_unless_non_utf8_fs!();
     let dir = collision_corpus(true);
     let query = SmartQuery {
         subject: "collide_fn".to_string(),
@@ -223,6 +242,7 @@ fn trace_emits_unique_display_paths_for_colliders() {
 /// display names in byte order (fe before ff).
 #[test]
 fn result_order_is_stable_across_creation_orders() {
+    skip_unless_non_utf8_fs!();
     let forward = collision_corpus(true);
     let backward = collision_corpus(false);
 
@@ -294,6 +314,7 @@ fn result_order_is_stable_across_creation_orders() {
 /// into outline, which previously dead-ended on non-UTF-8 names.
 #[test]
 fn outline_round_trips_disambiguated_display_paths() {
+    skip_unless_non_utf8_fs!();
     let dir = collision_corpus(true);
 
     let outline_args = |file: &str| OutlineArgs {
@@ -330,6 +351,7 @@ fn outline_round_trips_disambiguated_display_paths() {
 /// matching file), so single non-UTF-8 files remain reachable.
 #[test]
 fn outline_resolves_unambiguous_lossy_path() {
+    skip_unless_non_utf8_fs!();
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join(OsStr::from_bytes(b"only\xff.rs")),
@@ -359,6 +381,7 @@ fn outline_resolves_unambiguous_lossy_path() {
 /// a different (non-UTF-8) file.
 #[test]
 fn outline_decoy_with_literal_replacement_char_does_not_shadow_colliders() {
+    skip_unless_non_utf8_fs!();
     let dir = collision_corpus(true);
     // Decoy literally named "collide\u{FFFD}.rs" (valid UTF-8).
     fs::write(dir.path().join("collide\u{FFFD}.rs"), "fn decoy_fn() {}\n").unwrap();
@@ -398,6 +421,7 @@ fn outline_decoy_with_literal_replacement_char_does_not_shadow_colliders() {
 /// hex `path_bytes` for the colliders (guards the serde field wiring).
 #[test]
 fn grep_json_serialization_has_unique_paths_and_path_bytes() {
+    skip_unless_non_utf8_fs!();
     let dir = collision_corpus(true);
     let result = run_grep(dir.path(), &grep_args("needle_xyz")).unwrap();
     let value = serde_json::to_value(result.to_json()).unwrap();
