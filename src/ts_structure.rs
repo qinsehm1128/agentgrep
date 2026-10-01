@@ -193,24 +193,36 @@ pub fn extract(language: &str, text: &str) -> Option<Vec<StructureItem>> {
     Some(items)
 }
 
-fn collect(node: Node<'_>, src: &[u8], spec: &Spec, out: &mut Vec<StructureItem>) {
-    let kind = node.kind();
-    if let Some((_, item_kind)) = spec.definitions.iter().find(|(k, _)| *k == kind)
-        && let Some(label) = definition_name(node, src)
-    {
-        let start_line = node.start_position().row + 1;
-        let end_line = node.end_position().row + 1;
-        out.push(StructureItem {
-            kind: (*item_kind).to_string(),
-            label,
-            start_line,
-            end_line,
-            line_count: end_line - start_line + 1,
-        });
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect(child, src, spec, out);
+/// Walk the tree with a cursor instead of recursion: deeply nested but valid
+/// input (a long `a + b + ...` chain) would otherwise overflow the stack.
+fn collect(root: Node<'_>, src: &[u8], spec: &Spec, out: &mut Vec<StructureItem>) {
+    let mut cursor = root.walk();
+    loop {
+        let node = cursor.node();
+        if let Some((_, item_kind)) = spec.definitions.iter().find(|(k, _)| *k == node.kind())
+            && let Some(label) = definition_name(node, src)
+        {
+            let start_line = node.start_position().row + 1;
+            let end_line = node.end_position().row + 1;
+            out.push(StructureItem {
+                kind: (*item_kind).to_string(),
+                label,
+                start_line,
+                end_line,
+                line_count: end_line - start_line + 1,
+            });
+        }
+        if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return;
+            }
+        }
     }
 }
 
@@ -299,6 +311,15 @@ mod tests {
             let items = extract(lang, text).unwrap_or_default();
             assert!(!items.is_empty(), "{lang} produced no items");
         }
+    }
+
+    #[test]
+    #[cfg(feature = "ts-go")]
+    fn deeply_nested_expression_does_not_overflow_stack() {
+        let operands = vec!["1"; 30_000].join(" + ");
+        let text = format!("package p\nfunc a() int {{ return {operands} }}\nfunc b() {{}}\n");
+        let names: Vec<_> = labels("go", &text).into_iter().map(|(n, _, _)| n).collect();
+        assert_eq!(names, vec!["a", "b"]);
     }
 
     #[test]

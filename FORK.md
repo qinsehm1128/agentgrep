@@ -33,7 +33,8 @@ Measured with `tests/ranking_bench.rs` (55 queries over qin-code @ 430b840,
 | Model2Vec re-ranking of the top 10 (RRF, weight 0.4) for natural-language subjects | `--features semantic` + `AGENTGREP_SEMANTIC_MODEL=<dir>` | hit@1 87.3% -> 90.9%, natural 62.5% -> 75%, holdout 75% -> 83.3%. +2.5 MB binary; model is never downloaded by agentgrep. |
 | tree-sitter structure for Go, Java, C, C++, C#, Ruby, PHP, Kotlin, Swift | `--features treesitter` (all) or per grammar: `ts-go`, `ts-java`, `ts-c`, `ts-cpp`, `ts-csharp`, `ts-ruby`, `ts-php`, `ts-kotlin`, `ts-swift` | Go and Java hit@1 0% -> 85-95%. Binary 3.8 MB -> 24.5 MB. |
 
-Invariants kept: semantic is a re-ranker only (never adds or drops a file);
+Invariants kept: semantic only reorders the files about to be returned
+(never changes which files are returned);
 files passing the original strict subject gate are always scored; rg parity
 36/36 (synthetic + jcode corpora; the Linux corpus was not available).
 
@@ -45,6 +46,15 @@ AGENTGREP_BENCH_ROOT=/path/to/qin-code@430b840 \
 python3 scripts/lang_corpus_check.py target/release/agentgrep /path/to/gin go 40
 python3 scripts/ranking_latency.py OLD_BIN NEW_BIN /path/to/corpus 5
 ```
+
+### Review fixes (before tagging `v0.1.7-qin.2`)
+
+| Finding | Fix |
+|---|---|
+| Recursive tree walk overflowed the stack on a 120 KB Go file with 30k nested `+` | Iterative tree cursor; an 800 KB / 200k-operand file now parses |
+| Every candidate's text was held until scoring (100 x 1 MiB: 207 MB RSS) | Pass 1 keeps only counts; pass 2 re-reads. Same probe: 9 MB |
+| Stems like `policy` are not substrings of `policies`; `files` stayed unstemmed | Stemmer only strips letters (`policies` -> `polic`), falls through to shorter suffixes |
+| Semantic re-rank could swap in a file from rank 6 | Re-rank runs after truncation to `max_files` |
 
 ## Not done yet
 

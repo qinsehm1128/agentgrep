@@ -75,60 +75,55 @@ pub fn query_terms(subject: &str) -> Vec<Term> {
     out
 }
 
-/// A light suffix-stripping stemmer. Output is used as a substring needle,
-/// so it only needs to be a prefix shared by the word's common inflections.
+/// A light suffix-stripping stemmer.
+///
+/// The stem is used as a substring needle against raw text, so it must be a
+/// prefix of every inflection it stands for. Rules therefore only strip
+/// letters, never add them: `policies` -> `polic` matches both `policies` and
+/// `policy`, whereas `policy` would miss `policies`.
 pub fn stem(word: &str) -> String {
     let w = word.to_ascii_lowercase();
     if w.len() <= MIN_STEM || !w.bytes().all(|b| b.is_ascii_alphabetic()) {
         return w;
     }
-    // Longest suffix first. `(suffix, replacement)`.
-    const RULES: &[(&str, &str)] = &[
-        ("ational", "ate"),
-        ("ization", "iz"),
-        ("ations", "at"),
-        ("ation", "at"),
-        ("ingly", ""),
-        ("ments", ""),
-        ("ment", ""),
-        ("ness", ""),
-        ("ings", ""),
-        ("ing", ""),
-        ("ions", ""),
-        ("ion", ""),
-        ("ies", "y"),
-        ("ers", ""),
-        ("er", ""),
-        ("ed", ""),
-        ("es", ""),
-        ("ly", ""),
-        ("s", ""),
+    // Longest suffix first.
+    const SUFFIXES: &[&str] = &[
+        "ational", "ization", "ations", "ation", "ingly", "ments", "ment", "ness", "ings", "ing",
+        "ions", "ion", "ies", "ers", "er", "ed", "es", "ly", "s",
     ];
-    for (suffix, replacement) in RULES {
-        if let Some(base) = w.strip_suffix(suffix) {
-            // Words ending in "ss" ("class", "process") keep their "s".
-            if *suffix == "s" && (base.ends_with('s') || base.ends_with('u') || base.ends_with('i'))
-            {
-                continue;
-            }
-            // "ion" only after t/s: detection -> detect, compression -> compress.
-            if (*suffix == "ion" || *suffix == "ions")
-                && !(base.ends_with('t') || base.ends_with('s'))
-            {
-                continue;
-            }
-            let mut stemmed = format!("{base}{replacement}");
-            collapse_double_consonant(&mut stemmed);
-            if stemmed.len() >= MIN_STEM {
-                return stemmed;
-            }
-            // Too short ("files" -> "fil" via "es"): try a shorter suffix.
+    for suffix in SUFFIXES {
+        let Some(base) = w.strip_suffix(suffix) else {
+            continue;
+        };
+        // Words ending in "ss"/"us"/"is" ("class", "status") keep their "s".
+        if *suffix == "s" && (base.ends_with('s') || base.ends_with('u') || base.ends_with('i')) {
+            continue;
         }
+        // "ion" only after t/s: detection -> detect, compression -> compress.
+        if (*suffix == "ion" || *suffix == "ions") && !(base.ends_with('t') || base.ends_with('s'))
+        {
+            continue;
+        }
+        let stemmed = match *suffix {
+            // "ies" -> drop "ies" and keep the shared prefix ("polic").
+            // "ational"/"ization"/"ation(s)": keep the "at"/"iz" so the stem
+            // stays a prefix of the base verb ("normalization" -> "normaliz").
+            "ational" | "ations" | "ation" => format!("{base}at"),
+            "ization" => format!("{base}iz"),
+            _ => base.to_string(),
+        };
+        let stemmed = collapse_double_consonant(stemmed, &w);
+        if stemmed.len() >= MIN_STEM {
+            return stemmed;
+        }
+        // Too short ("files" -> "fil" via "es"): try a shorter suffix.
     }
     w
 }
 
-fn collapse_double_consonant(s: &mut String) {
+/// "embedd" -> "embed", "stopp" -> "stop". Only when the shorter form is
+/// still a prefix of the original word, which it always is.
+fn collapse_double_consonant(mut s: String, original: &str) -> String {
     let bytes = s.as_bytes();
     let n = bytes.len();
     if n >= 2 {
@@ -137,6 +132,8 @@ fn collapse_double_consonant(s: &mut String) {
             s.pop();
         }
     }
+    debug_assert!(original.starts_with(&s));
+    s
 }
 
 /// Count non-overlapping occurrences of `needle` in `haystack`.
@@ -249,6 +246,9 @@ mod tests {
         assert_eq!(stem("embedder"), "embed");
         assert_eq!(stem("embeddings"), "embed");
         assert_eq!(stem("detection"), "detect");
+        assert_eq!(stem("policies"), "polic");
+        assert_eq!(stem("entries"), "entr");
+        assert_eq!(stem("normalization"), "normaliz");
         assert_eq!(stem("compression"), "compress");
         assert_eq!(stem("vectors"), "vector");
         assert_eq!(stem("commands"), "command");
@@ -268,9 +268,37 @@ mod tests {
             ("nodes", "node"),
             ("caches", "cache"),
             ("entries", "entry"),
+            ("policies", "policy"),
+            ("queries", "query"),
         ] {
             let st = stem(plural);
-            assert!(singular.starts_with(&st), "{plural} -> {st} does not prefix {singular}");
+            assert!(
+                singular.starts_with(&st),
+                "{plural} -> {st} does not prefix {singular}"
+            );
+        }
+    }
+
+    #[test]
+    fn stem_is_always_a_prefix_of_the_word() {
+        for word in [
+            "policies",
+            "entries",
+            "queries",
+            "embedding",
+            "embedder",
+            "detection",
+            "normalization",
+            "configurations",
+            "relational",
+            "stopped",
+            "running",
+            "matches",
+            "statuses",
+            "files",
+        ] {
+            let st = stem(word);
+            assert!(word.starts_with(&st), "{word} -> {st}");
         }
     }
 

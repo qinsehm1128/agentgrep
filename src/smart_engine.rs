@@ -364,10 +364,12 @@ pub fn run_smart(root: &Path, query: &SmartQuery, args: &SmartArgs) -> Result<Sm
     // total and portable (collect_file_entries is also pre-sorted by native
     // path bytes).
     files.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    files.truncate(args.max_files);
     if shape == QueryShape::Natural {
+        // After truncation: semantics may reorder the returned files but never
+        // change which files are returned.
         semantic_rerank(&query.subject, &mut files);
     }
-    files.truncate(args.max_files);
 
     let total_regions = files.iter().map(|f| f.regions.len()).sum();
     let best_file = files.first().map(|f| f.path.clone());

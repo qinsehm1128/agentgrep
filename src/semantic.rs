@@ -4,9 +4,9 @@
 //! mean pooling, no transformer forward pass, so a query costs about a
 //! millisecond on CPU.
 //!
-//! This is a **re-ranker, not a recall channel**. It only reorders files the
-//! lexical pass already admitted, so turning it on can never add or remove a
-//! file from the candidate set.
+//! This is a **re-ranker, not a recall channel**. It only reorders the files
+//! smart mode is about to return, so turning it on never changes which files
+//! are returned, only their order.
 //!
 //! The model is never downloaded here. It is loaded from a local directory
 //! (containing `tokenizer.json`, `model.safetensors`, `config.json`) named
