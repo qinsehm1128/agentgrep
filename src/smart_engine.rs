@@ -352,6 +352,9 @@ pub fn run_smart(root: &Path, query: &SmartQuery, args: &SmartArgs) -> Result<Sm
     // total and portable (collect_file_entries is also pre-sorted by native
     // path bytes).
     files.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    if shape == QueryShape::Natural {
+        semantic_rerank(&query.subject, &mut files);
+    }
     files.truncate(args.max_files);
 
     let total_regions = files.iter().map(|f| f.regions.len()).sum();
@@ -627,6 +630,59 @@ impl RegionLexicon<'_> {
         }
         out
     }
+}
+
+/// How many top lexical files the semantic pass may reorder.
+const SEMANTIC_RERANK_DEPTH: usize = 10;
+/// Weight of the semantic rank in the fusion, relative to the lexical rank.
+/// Kept below 1: at 0.7 and above the static model overrides good lexical
+/// hits and the bench gets worse than with semantics off.
+const SEMANTIC_RRF_WEIGHT: f64 = 0.4;
+
+/// Fuse the lexical order with Model2Vec similarity by reciprocal rank.
+///
+/// Only reorders the files already found; never adds or drops one. No-op
+/// unless the `semantic` feature is built and a model is configured.
+fn semantic_rerank(subject: &str, files: &mut [SmartFile]) {
+    if !crate::semantic::available() || files.len() < 2 {
+        return;
+    }
+    let depth = files.len().min(SEMANTIC_RERANK_DEPTH);
+    let head = &mut files[..depth];
+    let docs: Vec<String> = head.iter().map(semantic_document).collect();
+    let Some(sims) = crate::semantic::similarities(subject, &docs) else {
+        return;
+    };
+    let sims: Vec<f64> = sims.into_iter().map(f64::from).collect();
+    let sem_rank = crate::semantic::ranks_desc(&sims);
+    let k = crate::semantic::RRF_K;
+    let mut fused: Vec<(f64, usize)> = (0..depth)
+        .map(|i| {
+            let lexical = 1.0 / (k + (i + 1) as f64);
+            let semantic = SEMANTIC_RRF_WEIGHT / (k + sem_rank[i] as f64);
+            (lexical + semantic, i)
+        })
+        .collect();
+    fused.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    let order: Vec<usize> = fused.into_iter().map(|(_, i)| i).collect();
+    let mut reordered: Vec<SmartFile> = order.iter().map(|&i| head[i].clone()).collect();
+    for (i, file) in reordered.iter_mut().enumerate() {
+        file.why.push(format!(
+            "semantic rank {} (cos {:.3})",
+            sem_rank[order[i]], sims[order[i]]
+        ));
+    }
+    head.clone_from_slice(&reordered);
+}
+
+/// Text that represents a file to the embedding model: the label and body
+/// of its best region. Whole-file text and label lists were measured and
+/// rank worse (bench: natural hit@1 56-62% vs 75% with the best region).
+fn semantic_document(file: &SmartFile) -> String {
+    file.regions
+        .first()
+        .map(|r| format!("{} {}", normalize_match_text(&r.label), r.body))
+        .unwrap_or_else(|| normalize_match_text(&file.path))
 }
 
 fn should_prune_region(familiarity: Familiarity) -> bool {

@@ -5,6 +5,7 @@ pub mod outline;
 pub mod rank;
 pub mod render;
 pub mod search;
+pub mod semantic;
 pub mod smart_dsl;
 pub mod smart_engine;
 pub mod structure;
