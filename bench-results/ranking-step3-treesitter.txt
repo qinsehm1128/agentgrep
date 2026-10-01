@@ -1,0 +1,12 @@
+Real-corpus non-Rust check (scripts/lang_corpus_check.py, 40 unique definitions each)
+gin @ 43fe48e (Go), gson @ 854c825 (Java)
+
+v0.1.7-qin.1 (upstream)
+  go    n= 40  symbol hit@1=  0.0%  split hit@1=  0.0%
+  java  n= 40  symbol hit@1=  0.0%  split hit@1=  0.0%
+lexical ranking
+  go    n= 40  symbol hit@1=  0.0%  split hit@1=  0.0%
+  java  n= 40  symbol hit@1=  0.0%  split hit@1=  0.0%
++ treesitter
+  go    n= 40  symbol hit@1= 95.0%  split hit@1= 87.5%
+  java  n= 40  symbol hit@1= 95.0%  split hit@1= 85.0%

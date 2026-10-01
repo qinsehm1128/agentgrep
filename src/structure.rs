@@ -18,6 +18,21 @@ pub struct FileStructure {
 }
 
 pub fn extract_file_structure(path: &Path, relative_path: &str, text: &str) -> FileStructure {
+    #[cfg(feature = "treesitter")]
+    if let Some(language) = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .and_then(crate::ts_structure::language_for_extension)
+        && let Some(items) = crate::ts_structure::extract(language, text)
+    {
+        // Ranges come from the AST, so `finalize_ranges` is not applied.
+        return FileStructure {
+            language: language.to_string(),
+            role: infer_role(relative_path),
+            items,
+        };
+    }
+
     let language = detect_language(path);
     let mut items = match language {
         "rust" => extract_rust(text),

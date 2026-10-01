@@ -9,6 +9,7 @@ pub mod semantic;
 pub mod smart_dsl;
 pub mod smart_engine;
 pub mod structure;
+pub mod ts_structure;
 pub mod workspace;
 
 #[cfg(test)]

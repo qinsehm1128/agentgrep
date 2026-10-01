@@ -11,6 +11,17 @@ globset = "0.4"
 ignore = "0.4"
 memchr = "2.7"
 model2vec-rs = { version = "0.3", default-features = false, features = ["onig"], optional = true }
+# Versions match qin-code's lockfile so enabling `treesitter` there adds no crates.
+tree-sitter = { version = "0.26", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+tree-sitter-c = { version = "0.24", optional = true }
+tree-sitter-cpp = { version = "0.23", optional = true }
+tree-sitter-c-sharp = { version = "0.23", optional = true }
+tree-sitter-ruby = { version = "0.23", optional = true }
+tree-sitter-php = { version = "0.24", optional = true }
+tree-sitter-kotlin-ng = { version = "1.1", optional = true }
+tree-sitter-swift = { version = "0.7", optional = true }
 regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -20,6 +31,20 @@ default = []
 # Optional semantic re-ranking with Model2Vec static embeddings. Needs a
 # local model directory at query time; never downloads anything itself.
 semantic = ["dep:model2vec-rs"]
+# AST-accurate structure items for languages the line-based extractor does
+# not cover (Go, Java, C, C++, C#, Ruby, PHP, Kotlin, Swift).
+treesitter = [
+    "dep:tree-sitter",
+    "dep:tree-sitter-go",
+    "dep:tree-sitter-java",
+    "dep:tree-sitter-c",
+    "dep:tree-sitter-cpp",
+    "dep:tree-sitter-c-sharp",
+    "dep:tree-sitter-ruby",
+    "dep:tree-sitter-php",
+    "dep:tree-sitter-kotlin-ng",
+    "dep:tree-sitter-swift",
+]
 
 [dev-dependencies]
 pretty_assertions = "1.4"
