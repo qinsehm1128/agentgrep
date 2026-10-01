@@ -32,19 +32,20 @@ default = []
 # local model directory at query time; never downloads anything itself.
 semantic = ["dep:model2vec-rs"]
 # AST-accurate structure items for languages the line-based extractor does
-# not cover (Go, Java, C, C++, C#, Ruby, PHP, Kotlin, Swift).
-treesitter = [
-    "dep:tree-sitter",
-    "dep:tree-sitter-go",
-    "dep:tree-sitter-java",
-    "dep:tree-sitter-c",
-    "dep:tree-sitter-cpp",
-    "dep:tree-sitter-c-sharp",
-    "dep:tree-sitter-ruby",
-    "dep:tree-sitter-php",
-    "dep:tree-sitter-kotlin-ng",
-    "dep:tree-sitter-swift",
-]
+# not cover. One feature per grammar so embedders link only what they ship;
+# `treesitter` enables all of them.
+treesitter = ["ts-go", "ts-java", "ts-c", "ts-cpp", "ts-csharp", "ts-ruby", "ts-php", "ts-kotlin", "ts-swift"]
+# Internal: the shared tree-sitter runtime. Enabled by every `ts-*` feature.
+ts-core = ["dep:tree-sitter"]
+ts-go = ["ts-core", "dep:tree-sitter-go"]
+ts-java = ["ts-core", "dep:tree-sitter-java"]
+ts-c = ["ts-core", "dep:tree-sitter-c"]
+ts-cpp = ["ts-core", "dep:tree-sitter-cpp"]
+ts-csharp = ["ts-core", "dep:tree-sitter-c-sharp"]
+ts-ruby = ["ts-core", "dep:tree-sitter-ruby"]
+ts-php = ["ts-core", "dep:tree-sitter-php"]
+ts-kotlin = ["ts-core", "dep:tree-sitter-kotlin-ng"]
+ts-swift = ["ts-core", "dep:tree-sitter-swift"]
 
 [dev-dependencies]
 pretty_assertions = "1.4"

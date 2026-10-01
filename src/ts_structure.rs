@@ -7,7 +7,7 @@
 //! line-based path does not handle. The definition node kinds per language
 //! mirror qin-code's `code_index` classifiers.
 
-#![cfg(feature = "treesitter")]
+#![cfg(feature = "ts-core")]
 
 use crate::structure::StructureItem;
 use tree_sitter::{Language, Node, Parser};
@@ -18,6 +18,7 @@ struct Spec {
     definitions: &'static [(&'static str, &'static str)],
 }
 
+#[cfg(feature = "ts-go")]
 const GO: Spec = Spec {
     language: || tree_sitter_go::LANGUAGE.into(),
     definitions: &[
@@ -27,6 +28,7 @@ const GO: Spec = Spec {
     ],
 };
 
+#[cfg(feature = "ts-java")]
 const JAVA: Spec = Spec {
     language: || tree_sitter_java::LANGUAGE.into(),
     definitions: &[
@@ -39,6 +41,7 @@ const JAVA: Spec = Spec {
     ],
 };
 
+#[cfg(feature = "ts-c")]
 const C: Spec = Spec {
     language: || tree_sitter_c::LANGUAGE.into(),
     definitions: &[
@@ -50,6 +53,7 @@ const C: Spec = Spec {
     ],
 };
 
+#[cfg(feature = "ts-cpp")]
 const CPP: Spec = Spec {
     language: || tree_sitter_cpp::LANGUAGE.into(),
     definitions: &[
@@ -64,6 +68,7 @@ const CPP: Spec = Spec {
     ],
 };
 
+#[cfg(feature = "ts-csharp")]
 const CSHARP: Spec = Spec {
     language: || tree_sitter_c_sharp::LANGUAGE.into(),
     definitions: &[
@@ -77,6 +82,7 @@ const CSHARP: Spec = Spec {
     ],
 };
 
+#[cfg(feature = "ts-ruby")]
 const RUBY: Spec = Spec {
     language: || tree_sitter_ruby::LANGUAGE.into(),
     definitions: &[
@@ -87,6 +93,7 @@ const RUBY: Spec = Spec {
     ],
 };
 
+#[cfg(feature = "ts-php")]
 const PHP: Spec = Spec {
     language: || tree_sitter_php::LANGUAGE_PHP.into(),
     definitions: &[
@@ -99,6 +106,7 @@ const PHP: Spec = Spec {
     ],
 };
 
+#[cfg(feature = "ts-kotlin")]
 const KOTLIN: Spec = Spec {
     language: || tree_sitter_kotlin_ng::LANGUAGE.into(),
     definitions: &[
@@ -109,6 +117,7 @@ const KOTLIN: Spec = Spec {
     ],
 };
 
+#[cfg(feature = "ts-swift")]
 const SWIFT: Spec = Spec {
     language: || tree_sitter_swift::LANGUAGE.into(),
     definitions: &[
@@ -120,9 +129,9 @@ const SWIFT: Spec = Spec {
     ],
 };
 
-/// Language name for a file extension, if this module handles it.
+/// Language name for a file extension, if a grammar for it is compiled in.
 pub fn language_for_extension(ext: &str) -> Option<&'static str> {
-    Some(match ext {
+    let language = match ext {
         "go" => "go",
         "java" => "java",
         "c" | "h" => "c",
@@ -133,22 +142,32 @@ pub fn language_for_extension(ext: &str) -> Option<&'static str> {
         "kt" | "kts" => "kotlin",
         "swift" => "swift",
         _ => return None,
-    })
+    };
+    spec(language).map(|_| language)
 }
 
 fn spec(language: &str) -> Option<&'static Spec> {
-    Some(match language {
-        "go" => &GO,
-        "java" => &JAVA,
-        "c" => &C,
-        "cpp" => &CPP,
-        "csharp" => &CSHARP,
-        "ruby" => &RUBY,
-        "php" => &PHP,
-        "kotlin" => &KOTLIN,
-        "swift" => &SWIFT,
-        _ => return None,
-    })
+    match language {
+        #[cfg(feature = "ts-go")]
+        "go" => Some(&GO),
+        #[cfg(feature = "ts-java")]
+        "java" => Some(&JAVA),
+        #[cfg(feature = "ts-c")]
+        "c" => Some(&C),
+        #[cfg(feature = "ts-cpp")]
+        "cpp" => Some(&CPP),
+        #[cfg(feature = "ts-csharp")]
+        "csharp" => Some(&CSHARP),
+        #[cfg(feature = "ts-ruby")]
+        "ruby" => Some(&RUBY),
+        #[cfg(feature = "ts-php")]
+        "php" => Some(&PHP),
+        #[cfg(feature = "ts-kotlin")]
+        "kotlin" => Some(&KOTLIN),
+        #[cfg(feature = "ts-swift")]
+        "swift" => Some(&SWIFT),
+        _ => None,
+    }
 }
 
 /// Files larger than this are left to the line-based path.
@@ -233,6 +252,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ts-go")]
     fn go_functions_methods_and_types() {
         let text = "package p\n\ntype Store struct {\n\tk int\n}\n\nfunc (s *Store) Refresh() error {\n\treturn nil\n}\n\nfunc helper() {}\n";
         assert_eq!(
@@ -246,12 +266,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ts-c")]
     fn c_function_name_from_declarator_chain() {
         let text = "static int *parse_header(const char *buf) {\n    return 0;\n}\n";
         assert_eq!(labels("c", text), vec![("parse_header".into(), 1, 3)]);
     }
 
     #[test]
+    #[cfg(feature = "ts-java")]
     fn java_class_and_method_nest() {
         let text = "class Billing {\n  int lateFee() {\n    return 1;\n  }\n}\n";
         assert_eq!(
@@ -261,6 +283,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "treesitter")]
     fn every_language_parses() {
         for (lang, text) in [
             ("go", "package p\nfunc A() {}\n"),

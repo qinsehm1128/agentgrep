@@ -31,7 +31,7 @@ Measured with `tests/ranking_bench.rs` (55 queries over qin-code @ 430b840,
 |---|---|---|
 | Stemmed term matching, stopwords, query shape, BM25, definition and coherence boosts, stub/mock penalty | default | hit@1 63.6% -> 87.3%, zero-result 29.1% -> 0%, natural-language hit@1 0% -> 62.5%. Latency 1.0-1.25x. |
 | Model2Vec re-ranking of the top 10 (RRF, weight 0.4) for natural-language subjects | `--features semantic` + `AGENTGREP_SEMANTIC_MODEL=<dir>` | hit@1 87.3% -> 90.9%, natural 62.5% -> 75%, holdout 75% -> 83.3%. +2.5 MB binary; model is never downloaded by agentgrep. |
-| tree-sitter structure for Go, Java, C, C++, C#, Ruby, PHP, Kotlin, Swift | `--features treesitter` | Go and Java hit@1 0% -> 85-95%. Binary 3.8 MB -> 24.5 MB. |
+| tree-sitter structure for Go, Java, C, C++, C#, Ruby, PHP, Kotlin, Swift | `--features treesitter` (all) or per grammar: `ts-go`, `ts-java`, `ts-c`, `ts-cpp`, `ts-csharp`, `ts-ruby`, `ts-php`, `ts-kotlin`, `ts-swift` | Go and Java hit@1 0% -> 85-95%. Binary 3.8 MB -> 24.5 MB. |
 
 Invariants kept: semantic is a re-ranker only (never adds or drops a file);
 files passing the original strict subject gate are always scored; rg parity

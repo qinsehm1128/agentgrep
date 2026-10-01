@@ -18,7 +18,7 @@ pub struct FileStructure {
 }
 
 pub fn extract_file_structure(path: &Path, relative_path: &str, text: &str) -> FileStructure {
-    #[cfg(feature = "treesitter")]
+    #[cfg(feature = "ts-core")]
     if let Some(language) = path
         .extension()
         .and_then(|s| s.to_str())
