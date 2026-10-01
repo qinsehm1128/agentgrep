@@ -83,7 +83,22 @@ pub fn query_terms(subject: &str) -> Vec<Term> {
 /// `policy`, whereas `policy` would miss `policies`.
 pub fn stem(word: &str) -> String {
     let w = word.to_ascii_lowercase();
-    if w.len() <= MIN_STEM || !w.bytes().all(|b| b.is_ascii_alphabetic()) {
+    if !w.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return w;
+    }
+    // Four-letter plurals of three-letter words ("keys", "days", "maps"):
+    // a 3-letter stem is still selective enough as a substring needle.
+    if w.len() == MIN_STEM {
+        if let Some(base) = w.strip_suffix('s')
+            && !base.ends_with('s')
+            && !base.ends_with('u')
+            && !base.ends_with('i')
+        {
+            return base.to_string();
+        }
+        return w;
+    }
+    if w.len() < MIN_STEM {
         return w;
     }
     // Longest suffix first.
@@ -113,7 +128,15 @@ pub fn stem(word: &str) -> String {
             _ => base.to_string(),
         };
         let stemmed = collapse_double_consonant(stemmed, &w);
-        if stemmed.len() >= MIN_STEM {
+        // "ies"/"es" stems are allowed one letter shorter: "cities" -> "cit"
+        // is the only stem that prefixes both "cities" and "city" (falling
+        // through gives "citi"), and likewise "boxes" -> "box".
+        let min = if *suffix == "ies" || *suffix == "es" {
+            MIN_STEM - 1
+        } else {
+            MIN_STEM
+        };
+        if stemmed.len() >= min {
             return stemmed;
         }
         // Too short ("files" -> "fil" via "es"): try a shorter suffix.
@@ -270,6 +293,44 @@ mod tests {
             ("entries", "entry"),
             ("policies", "policy"),
             ("queries", "query"),
+            ("cities", "city"),
+            ("copies", "copy"),
+            ("bodies", "body"),
+            ("duties", "duty"),
+        ] {
+            let st = stem(plural);
+            assert!(
+                singular.starts_with(&st),
+                "{plural} -> {st} does not prefix {singular}"
+            );
+        }
+    }
+
+    #[test]
+    fn plural_stem_prefixes_singular() {
+        // (plural, singular) pairs across the suffix rules.
+        for (plural, singular) in [
+            ("cities", "city"),
+            ("copies", "copy"),
+            ("bodies", "body"),
+            ("replies", "reply"),
+            ("strategies", "strategy"),
+            ("dependencies", "dependency"),
+            ("keys", "key"),
+            ("days", "day"),
+            ("boxes", "box"),
+            ("indexes", "index"),
+            ("buses", "bus"),
+            ("classes", "class"),
+            ("statuses", "status"),
+            ("matches", "match"),
+            ("caches", "cache"),
+            ("handles", "handle"),
+            ("services", "service"),
+            ("files", "file"),
+            ("nodes", "node"),
+            ("tokens", "token"),
+            ("aliases", "alias"),
         ] {
             let st = stem(plural);
             assert!(
@@ -306,6 +367,8 @@ mod tests {
     fn short_and_protected_words_are_kept() {
         assert_eq!(stem("api"), "api");
         assert_eq!(stem("key"), "key");
+        assert_eq!(stem("bus"), "bus");
+        assert_eq!(stem("this"), "this");
         assert_eq!(stem("idle"), "idle");
         assert_eq!(stem("class"), "class");
         assert_eq!(stem("status"), "status");
