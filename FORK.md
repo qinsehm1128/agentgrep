@@ -55,6 +55,9 @@ python3 scripts/ranking_latency.py OLD_BIN NEW_BIN /path/to/corpus 5
 | Every candidate's text was held until scoring (100 x 1 MiB: 207 MB RSS) | Pass 1 keeps only counts; pass 2 re-reads. Same probe: 9 MB |
 | Stems like `policy` are not substrings of `policies`; `files` stayed unstemmed | Stemmer only strips letters (`policies` -> `polic`), falls through to shorter suffixes |
 | Semantic re-rank could swap in a file from rank 6 | Re-rank runs after truncation to `max_files` |
+| Short plurals (`cities`, `boxes`, `keys`) stemmed to non-prefixes of the singular | 3-letter stems allowed for `ies`/`es`/4-letter `s`; tested on 21 pairs |
+| A model whose tokenizer ids exceed the embedding rows made model2vec-rs panic | Model files are validated before use; encoding runs under `catch_unwind`; failure falls back to lexical order |
+| The model loaded even when there was nothing to re-rank | Candidate count is checked before the model |
 
 ## Not done yet
 

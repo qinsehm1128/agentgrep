@@ -660,7 +660,8 @@ const SEMANTIC_RRF_WEIGHT: f64 = 0.4;
 /// Only reorders the files already found; never adds or drops one. No-op
 /// unless the `semantic` feature is built and a model is configured.
 fn semantic_rerank(subject: &str, files: &mut [SmartFile]) {
-    if !crate::semantic::available() || files.len() < 2 {
+    // Length first: loading the model is the expensive part.
+    if files.len() < 2 || !crate::semantic::available() {
         return;
     }
     let depth = files.len().min(SEMANTIC_RERANK_DEPTH);

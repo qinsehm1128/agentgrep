@@ -11,6 +11,9 @@ globset = "0.4"
 ignore = "0.4"
 memchr = "2.7"
 model2vec-rs = { version = "0.3", default-features = false, features = ["onig"], optional = true }
+# Already pulled in by model2vec-rs; used to validate model files before use.
+safetensors = { version = "0.5", optional = true }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"], optional = true }
 # Versions match qin-code's lockfile so enabling `treesitter` there adds no crates.
 tree-sitter = { version = "0.26", optional = true }
 tree-sitter-go = { version = "0.25", optional = true }
@@ -30,7 +33,7 @@ serde_json = "1.0"
 default = []
 # Optional semantic re-ranking with Model2Vec static embeddings. Needs a
 # local model directory at query time; never downloads anything itself.
-semantic = ["dep:model2vec-rs"]
+semantic = ["dep:model2vec-rs", "dep:safetensors", "dep:tokenizers"]
 # AST-accurate structure items for languages the line-based extractor does
 # not cover. One feature per grammar so embedders link only what they ship;
 # `treesitter` enables all of them.
