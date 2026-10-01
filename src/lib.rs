@@ -2,6 +2,7 @@ pub mod cli;
 pub mod context;
 pub mod find;
 pub mod outline;
+pub mod rank;
 pub mod render;
 pub mod search;
 pub mod smart_dsl;

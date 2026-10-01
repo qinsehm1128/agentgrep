@@ -1,5 +1,6 @@
 use crate::cli::{FullRegionMode, SmartArgs};
 use crate::context::{Familiarity, HarnessContext};
+use crate::rank::{Bm25, QueryShape, Term, TermCounter, is_noise_path, query_shape, query_terms};
 use crate::smart_dsl::{Relation, SmartQuery};
 use crate::structure::{StructureItem, extract_file_structure, infer_role};
 use crate::workspace::{SearchScope, TextFile, collect_file_entries, read_text_file};
@@ -82,7 +83,19 @@ pub fn run_smart(root: &Path, query: &SmartQuery, args: &SmartArgs) -> Result<Sm
     let path_hint = query.path_hint.as_ref().map(|s| s.to_ascii_lowercase());
     let context = HarnessContext::load(args.context_json.as_deref())?;
 
-    let mut files = Vec::new();
+    let shape = query_shape(&query.subject);
+    let terms = query_terms(&query.subject);
+    let soft_required = soft_required_terms(terms.len());
+    let counter = TermCounter::new(&terms);
+
+    // Pass 1: walk every file once, collect BM25 statistics, and keep the
+    // candidates. A file is a candidate if it passes the original strict
+    // subject gate, or (for multi-term subjects) contains enough of the
+    // stemmed query terms.
+    let mut doc_freq = vec![0u32; terms.len()];
+    let mut total_docs = 0usize;
+    let mut total_len = 0u64;
+    let mut candidates: Vec<Candidate> = Vec::new();
     for entry in collect_file_entries(&scope) {
         let relative_lower = entry.relative_path.to_ascii_lowercase();
         if let Some(path_hint) = &path_hint
@@ -106,15 +119,68 @@ pub fn run_smart(root: &Path, query: &SmartQuery, args: &SmartArgs) -> Result<Sm
             text,
         };
         let text_lower = file.text.to_ascii_lowercase();
-        if !file_may_contain_subject(
+        let tf = term_frequencies(&counter, &relative_lower, &text_lower);
+        total_docs += 1;
+        total_len += file.text.len() as u64;
+        let mut matched_terms = 0;
+        for (df, &count) in doc_freq.iter_mut().zip(&tf) {
+            if count > 0 {
+                *df += 1;
+                matched_terms += 1;
+            }
+        }
+        let strict = file_may_contain_subject(
             &relative_lower,
             &text_lower,
             &query.subject,
             &subject_lower,
             &subject_tokens,
-        ) {
+        );
+        let lexical = terms.len() >= 2 && matched_terms >= soft_required;
+        if !strict && !lexical {
             continue;
         }
+        candidates.push(Candidate {
+            file,
+            relative_lower,
+            text_lower,
+            strict,
+            tf,
+            bm25: 0.0,
+        });
+    }
+
+    let bm25 = Bm25::new(&doc_freq, total_docs, total_len);
+    for candidate in &mut candidates {
+        candidate.bm25 = bm25.score(&candidate.tf, candidate.file.text.len());
+    }
+    // Strict candidates are always scored, as before. Lexical-only
+    // candidates are capped to the best by BM25 so broad queries stay fast.
+    let (mut strict_candidates, mut lexical_candidates): (Vec<_>, Vec<_>) =
+        candidates.into_iter().partition(|c| c.strict);
+    lexical_candidates.sort_by(|a, b| b.bm25.total_cmp(&a.bm25));
+    lexical_candidates.truncate(MAX_LEXICAL_CANDIDATES);
+    strict_candidates.append(&mut lexical_candidates);
+    let candidates = strict_candidates;
+    let max_bm25 = candidates.iter().map(|c| c.bm25).fold(0.0, f64::max);
+    let region_lex = RegionLexicon {
+        terms: &terms,
+        idf: (0..terms.len()).map(|i| bm25.idf(i)).collect(),
+        total_idf: bm25.total_idf(),
+        required: soft_required,
+        shape,
+    };
+
+    // Pass 2: structural scoring (unchanged) plus lexical signals.
+    let mut files = Vec::new();
+    for candidate in candidates {
+        let Candidate {
+            file,
+            relative_lower,
+            text_lower,
+            bm25: file_bm25,
+            ..
+        } = candidate;
         let structure = extract_file_structure(&file.path, &file.relative_path, &file.text);
         let lower_lines = collect_lower_lines(&file.text);
         let subject_mentions = count_lines(&lower_lines, &subject_lower);
@@ -178,6 +244,29 @@ pub fn run_smart(root: &Path, query: &SmartQuery, args: &SmartArgs) -> Result<Sm
             why.push(format!("path hint matched: {path_hint}"));
         }
 
+        let noise_path = is_noise_path(&relative_lower);
+        if max_bm25 > 0.0 {
+            let weight = match shape {
+                QueryShape::Symbol => LEXICAL_FILE_WEIGHT_SYMBOL,
+                QueryShape::Natural => LEXICAL_FILE_WEIGHT_NATURAL,
+            };
+            let mut lexical = file_bm25 / max_bm25 * weight;
+            if noise_path {
+                // Stubs and mocks repeat the real names; do not let that
+                // repetition buy them relevance.
+                lexical *= 0.5;
+            }
+            let lexical = lexical.round() as i32;
+            if lexical > 0 {
+                file_score += lexical;
+                why.push(format!("bm25 term relevance: +{lexical}"));
+            }
+        }
+        if noise_path {
+            file_score -= NOISE_PATH_PENALTY;
+            why.push("stub/mock/legacy path penalty".to_string());
+        }
+
         let mut regions = build_regions(
             &file,
             &structure.items,
@@ -187,9 +276,23 @@ pub fn run_smart(root: &Path, query: &SmartQuery, args: &SmartArgs) -> Result<Sm
             &query.relation,
             args,
             context.as_ref(),
+            &region_lex,
         );
         if regions.is_empty() {
             continue;
+        }
+        if matches!(query.relation, Relation::Defined | Relation::Implementation)
+            && regions
+                .iter()
+                .any(|r| r.why.iter().any(|w| w == "exact subject label match"))
+        {
+            file_score += DEFINITION_FILE_BONUS;
+            why.push("defines the subject".to_string());
+        }
+        let extra_regions = regions.len().saturating_sub(1).min(COHERENCE_MAX_REGIONS) as i32;
+        if extra_regions > 0 {
+            file_score += extra_regions * COHERENCE_PER_REGION;
+            why.push(format!("{} matching regions in file", regions.len()));
         }
         regions.sort_by(|a, b| {
             b.score
@@ -275,6 +378,7 @@ fn build_regions(
     relation: &Relation,
     args: &SmartArgs,
     context: Option<&HarnessContext>,
+    lex: &RegionLexicon<'_>,
 ) -> Vec<SmartRegion> {
     let relation_terms = relation_terms(relation);
     let lines = file.text.lines().collect::<Vec<_>>();
@@ -303,14 +407,36 @@ fn build_regions(
         let item_label_lower = item.label.to_ascii_lowercase();
         let exact_label_match = exact_subject_label_match(&item.label, subject_lower);
         let token_label_match = subject_tokens_match_label(&item.label, subject_tokens);
-        if subject_line_hit_count == 0 && !exact_label_match && !token_label_match {
+        let coverage = lex.coverage(&item.label, region_lower);
+        let lexical_match = lex.terms.len() >= 2 && coverage.terms >= lex.required;
+        let subject_match = subject_line_hit_count > 0 || exact_label_match || token_label_match;
+        if !subject_match && !lexical_match {
             continue;
         }
 
-        let mut score = 80 + (subject_line_hit_count as i32 * 10);
+        let mut score = if subject_match {
+            80 + (subject_line_hit_count as i32 * 10)
+        } else {
+            LEXICAL_REGION_BASE
+        };
         let mut why = Vec::new();
         if subject_line_hit_count > 0 {
             why.push("exact subject match".to_string());
+        }
+        if coverage.terms > 0 && lex.total_idf > 0.0 {
+            let weight = match lex.shape {
+                QueryShape::Symbol => LEXICAL_REGION_WEIGHT_SYMBOL,
+                QueryShape::Natural => LEXICAL_REGION_WEIGHT_NATURAL,
+            };
+            let lexical = (coverage.idf / lex.total_idf * weight).round() as i32
+                + coverage.label_terms as i32 * LABEL_TERM_BONUS;
+            score += lexical;
+            why.push(format!(
+                "term coverage {}/{} ({} in label): +{lexical}",
+                coverage.terms,
+                lex.terms.len(),
+                coverage.label_terms
+            ));
         }
         let relation_hit = relation_terms.iter().any(|term| {
             item_label_lower.contains(term.as_str())
@@ -335,7 +461,9 @@ fn build_regions(
                 _ => 35,
             };
             why.push("subject tokens match label".to_string());
-        } else if matches!(relation, Relation::Defined | Relation::Implementation) {
+        } else if matches!(relation, Relation::Defined | Relation::Implementation)
+            && coverage.label_terms * 2 <= lex.terms.len()
+        {
             score -= 50;
             why.push("non-owner penalty".to_string());
         }
@@ -420,6 +548,85 @@ fn build_regions(
     }
 
     regions
+}
+
+/// Most lexical-only candidates scored per query (by BM25).
+const MAX_LEXICAL_CANDIDATES: usize = 40;
+const LEXICAL_FILE_WEIGHT_SYMBOL: f64 = 40.0;
+const LEXICAL_FILE_WEIGHT_NATURAL: f64 = 140.0;
+const LEXICAL_REGION_BASE: i32 = 40;
+const LEXICAL_REGION_WEIGHT_SYMBOL: f64 = 30.0;
+const LEXICAL_REGION_WEIGHT_NATURAL: f64 = 100.0;
+const LABEL_TERM_BONUS: i32 = 15;
+const DEFINITION_FILE_BONUS: i32 = 50;
+const COHERENCE_PER_REGION: i32 = 5;
+const COHERENCE_MAX_REGIONS: usize = 3;
+const NOISE_PATH_PENALTY: i32 = 40;
+/// Path matches count more than body matches toward a term's frequency.
+const PATH_TERM_WEIGHT: u32 = 2;
+
+struct Candidate {
+    file: TextFile,
+    relative_lower: String,
+    text_lower: String,
+    /// Passed the original whole-subject gate.
+    strict: bool,
+    tf: Vec<u32>,
+    bm25: f64,
+}
+
+/// How many of `n` query terms a lexical-only candidate must contain.
+fn soft_required_terms(n: usize) -> usize {
+    if n <= 2 { n } else { n.div_ceil(2) }
+}
+
+fn term_frequencies(counter: &TermCounter, relative_lower: &str, text_lower: &str) -> Vec<u32> {
+    counter
+        .counts(text_lower)
+        .into_iter()
+        .zip(counter.counts(relative_lower))
+        .map(|(body, path)| body + PATH_TERM_WEIGHT * path)
+        .collect()
+}
+
+struct RegionLexicon<'a> {
+    terms: &'a [Term],
+    idf: Vec<f64>,
+    total_idf: f64,
+    required: usize,
+    shape: QueryShape,
+}
+
+struct Coverage {
+    terms: usize,
+    label_terms: usize,
+    idf: f64,
+}
+
+impl RegionLexicon<'_> {
+    fn coverage(&self, label: &str, region_lower: &[String]) -> Coverage {
+        let label_norm = normalize_match_text(label);
+        let mut out = Coverage {
+            terms: 0,
+            label_terms: 0,
+            idf: 0.0,
+        };
+        for (term, idf) in self.terms.iter().zip(&self.idf) {
+            let in_label = label_norm.contains(term.stem.as_str());
+            if in_label
+                || region_lower
+                    .iter()
+                    .any(|line| line.contains(term.stem.as_str()))
+            {
+                out.terms += 1;
+                out.idf += idf;
+            }
+            if in_label {
+                out.label_terms += 1;
+            }
+        }
+        out
+    }
 }
 
 fn should_prune_region(familiarity: Familiarity) -> bool {
@@ -507,7 +714,7 @@ fn subject_tokens_match_label(label: &str, subject_tokens: &[String]) -> bool {
         .all(|token| normalized_label.contains(token.as_str()))
 }
 
-fn normalize_match_text(text: &str) -> String {
+pub(crate) fn normalize_match_text(text: &str) -> String {
     let mut out = String::new();
     let mut prev_is_lower = false;
     for ch in text.chars() {
@@ -1070,5 +1277,118 @@ mod tests {
                 line.chars().count()
             );
         }
+    }
+
+    fn lexical_args() -> SmartArgs {
+        SmartArgs {
+            terms: vec![],
+            json: false,
+            max_files: 5,
+            max_regions: 6,
+            full_region: FullRegionMode::Auto,
+            debug_plan: false,
+            debug_score: false,
+            paths_only: false,
+            path: None,
+            file_type: None,
+            glob: None,
+            hidden: false,
+            no_ignore: false,
+            context_json: None,
+        }
+    }
+
+    fn lexical_query(subject: &str, relation: Relation) -> SmartQuery {
+        SmartQuery {
+            subject: subject.to_string(),
+            relation,
+            support: vec![],
+            kind: None,
+            path_hint: None,
+        }
+    }
+
+    #[test]
+    fn natural_language_subject_finds_code_without_every_word() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/embedder.rs"),
+            "pub fn maybe_unload_if_idle(idle_for: Duration) -> bool {\n    \
+             // drop the embedder after a period without use\n    true\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("src/other.rs"),
+            "pub fn render() {\n    println!(\"hello\");\n}\n",
+        )
+        .unwrap();
+
+        // "when" is a stopword; "embedder" never appears next to "unload",
+        // so the old all-words gate returned nothing.
+        let query = lexical_query("unload embedder when idle", Relation::Implementation);
+        let result = run_smart(dir.path(), &query, &lexical_args()).unwrap();
+        assert_eq!(
+            result.files.first().map(|f| f.path.as_str()),
+            Some("src/embedder.rs")
+        );
+        assert_eq!(result.files[0].regions[0].label, "maybe_unload_if_idle");
+    }
+
+    #[test]
+    fn defining_file_outranks_file_that_mentions_subject_more() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("src/config.rs"),
+            "pub enum CompactionMode {\n    Reactive,\n    Semantic,\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("src/ui.rs"),
+            "pub fn set_compaction_mode(mode: CompactionMode) {\n    \
+             let _ = CompactionMode::Reactive;\n    let _ = CompactionMode::Semantic;\n}\n",
+        )
+        .unwrap();
+
+        let query = lexical_query("CompactionMode", Relation::Defined);
+        let result = run_smart(dir.path(), &query, &lexical_args()).unwrap();
+        assert_eq!(result.files[0].path, "src/config.rs");
+    }
+
+    #[test]
+    fn stub_copy_ranks_below_real_implementation() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        // The stub mentions the subject more often, so without the noise
+        // penalty it would win on hit counts alone.
+        fs::write(
+            dir.path().join("src/embedding_stub.rs"),
+            "// cosine similarity stub\n\
+             pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {\n    0.0\n}\n\
+             pub fn batch_cosine_similarity() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("src/embedding.rs"),
+            "pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {\n    \
+             a.iter().zip(b).map(|(x, y)| x * y).sum()\n}\n",
+        )
+        .unwrap();
+
+        let query = lexical_query("cosine similarity", Relation::Implementation);
+        let result = run_smart(dir.path(), &query, &lexical_args()).unwrap();
+        assert_eq!(result.files[0].path, "src/embedding.rs");
+    }
+
+    #[test]
+    fn single_word_subject_keeps_strict_gate() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.rs"), "fn alpha() {}\n").unwrap();
+        fs::write(dir.path().join("b.rs"), "fn beta() {}\n").unwrap();
+
+        let query = lexical_query("gamma", Relation::Defined);
+        let result = run_smart(dir.path(), &query, &lexical_args()).unwrap();
+        assert!(result.files.is_empty());
     }
 }
