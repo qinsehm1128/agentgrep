@@ -122,7 +122,7 @@ pub fn stem(word: &str) -> String {
             if stemmed.len() >= MIN_STEM {
                 return stemmed;
             }
-            return w;
+            // Too short ("files" -> "fil" via "es"): try a shorter suffix.
         }
     }
     w
@@ -255,6 +255,23 @@ mod tests {
         assert_eq!(stem("passages"), "passag");
         assert_eq!(stem("leaked"), "leak");
         assert_eq!(stem("filter"), "filt");
+    }
+
+    #[test]
+    fn short_plurals_reduce_to_singular_prefix() {
+        for (plural, singular) in [
+            ("files", "file"),
+            ("names", "name"),
+            ("rules", "rule"),
+            ("types", "type"),
+            ("pages", "page"),
+            ("nodes", "node"),
+            ("caches", "cache"),
+            ("entries", "entry"),
+        ] {
+            let st = stem(plural);
+            assert!(singular.starts_with(&st), "{plural} -> {st} does not prefix {singular}");
+        }
     }
 
     #[test]

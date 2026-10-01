@@ -95,7 +95,7 @@ pub fn run_smart(root: &Path, query: &SmartQuery, args: &SmartArgs) -> Result<Sm
     let mut doc_freq = vec![0u32; terms.len()];
     let mut total_docs = 0usize;
     let mut total_len = 0u64;
-    let mut candidates: Vec<Candidate> = Vec::new();
+    let mut pending: Vec<Pending> = Vec::new();
     for entry in collect_file_entries(&scope) {
         let relative_lower = entry.relative_path.to_ascii_lowercase();
         if let Some(path_hint) = &path_hint
@@ -140,28 +140,35 @@ pub fn run_smart(root: &Path, query: &SmartQuery, args: &SmartArgs) -> Result<Sm
         if !strict && !lexical {
             continue;
         }
-        candidates.push(Candidate {
-            file,
-            relative_lower,
-            text_lower,
+        // Keep only what ranking needs; text is re-read in pass 2, so memory
+        // stays at one file at a time no matter how many files match.
+        let len = file.text.len();
+        pending.push(Pending {
+            path: file.path,
+            relative_path: file.relative_path,
+            relative_raw: file.relative_raw,
             strict,
+            len,
             tf,
             bm25: 0.0,
         });
     }
 
     let bm25 = Bm25::new(&doc_freq, total_docs, total_len);
-    for candidate in &mut candidates {
-        candidate.bm25 = bm25.score(&candidate.tf, candidate.file.text.len());
+    for entry in &mut pending {
+        entry.bm25 = bm25.score(&entry.tf, entry.len);
     }
     // Strict candidates are always scored, as before. Lexical-only
     // candidates are capped to the best by BM25 so broad queries stay fast.
-    let (mut strict_candidates, mut lexical_candidates): (Vec<_>, Vec<_>) =
-        candidates.into_iter().partition(|c| c.strict);
-    lexical_candidates.sort_by(|a, b| b.bm25.total_cmp(&a.bm25));
-    lexical_candidates.truncate(MAX_LEXICAL_CANDIDATES);
-    strict_candidates.append(&mut lexical_candidates);
-    let candidates = strict_candidates;
+    let (mut candidates, mut lexical_only): (Vec<Pending>, Vec<Pending>) =
+        pending.into_iter().partition(|p| p.strict);
+    lexical_only.sort_by(|a, b| {
+        b.bm25
+            .total_cmp(&a.bm25)
+            .then_with(|| a.relative_path.cmp(&b.relative_path))
+    });
+    lexical_only.truncate(MAX_LEXICAL_CANDIDATES);
+    candidates.append(&mut lexical_only);
     let max_bm25 = candidates.iter().map(|c| c.bm25).fold(0.0, f64::max);
     let region_lex = RegionLexicon {
         terms: &terms,
@@ -174,13 +181,18 @@ pub fn run_smart(root: &Path, query: &SmartQuery, args: &SmartArgs) -> Result<Sm
     // Pass 2: structural scoring (unchanged) plus lexical signals.
     let mut files = Vec::new();
     for candidate in candidates {
-        let Candidate {
-            file,
-            relative_lower,
-            text_lower,
-            bm25: file_bm25,
-            ..
-        } = candidate;
+        let file_bm25 = candidate.bm25;
+        let Some(text) = read_text_file(&candidate.path) else {
+            continue;
+        };
+        let file = TextFile {
+            path: candidate.path,
+            relative_path: candidate.relative_path,
+            relative_raw: candidate.relative_raw,
+            text,
+        };
+        let relative_lower = file.relative_path.to_ascii_lowercase();
+        let text_lower = file.text.to_ascii_lowercase();
         let structure = extract_file_structure(&file.path, &file.relative_path, &file.text);
         let lower_lines = collect_lower_lines(&file.text);
         let subject_mentions = count_lines(&lower_lines, &subject_lower);
@@ -568,12 +580,14 @@ const NOISE_PATH_PENALTY: i32 = 40;
 /// Path matches count more than body matches toward a term's frequency.
 const PATH_TERM_WEIGHT: u32 = 2;
 
-struct Candidate {
-    file: TextFile,
-    relative_lower: String,
-    text_lower: String,
+/// A file that passed pass 1, before the text is re-read for scoring.
+struct Pending {
+    path: std::path::PathBuf,
+    relative_path: String,
+    relative_raw: Option<Vec<u8>>,
     /// Passed the original whole-subject gate.
     strict: bool,
+    len: usize,
     tf: Vec<u32>,
     bm25: f64,
 }
