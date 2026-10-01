@@ -21,15 +21,35 @@ maintained for use inside qin-code.
 | `style: cargo fmt` | Formatting only; upstream had unformatted code. |
 | `test: fix probe compile error ... skip non-UTF-8 name tests on APFS` | `tests/nonutf8_adversarial_probe.rs` did not compile on rustc 1.95. Tests that create non-UTF-8 file names now skip on filesystems that reject them (macOS APFS). Overlaps upstream PR #6. |
 
-## Planned work
+## Ranking work (`v0.1.7-qin.2`)
 
-Ranking improvements for `smart` mode, borrowed from
-[MinishLab/semble](https://github.com/MinishLab/semble), in this order:
+Borrowed from [MinishLab/semble](https://github.com/MinishLab/semble).
+Measured with `tests/ranking_bench.rs` (55 queries over qin-code @ 430b840,
+12 held out) and `scripts/lang_corpus_check.py` (gin, gson).
 
-1. Identifier stemming, plus adaptive weighting for symbol-like vs. natural-language queries.
-2. File-level boost when several regions in one file match.
-3. BM25 (IDF-weighted) scoring in place of raw hit counts.
-4. Optional semantic channel with Model2Vec static embeddings, fused by RRF, behind a feature gate.
-5. tree-sitter chunking in place of the regex structure extractor.
+| Change | Build | Effect |
+|---|---|---|
+| Stemmed term matching, stopwords, query shape, BM25, definition and coherence boosts, stub/mock penalty | default | hit@1 63.6% -> 87.3%, zero-result 29.1% -> 0%, natural-language hit@1 0% -> 62.5%. Latency 1.0-1.25x. |
+| Model2Vec re-ranking of the top 10 (RRF, weight 0.4) for natural-language subjects | `--features semantic` + `AGENTGREP_SEMANTIC_MODEL=<dir>` | hit@1 87.3% -> 90.9%, natural 62.5% -> 75%, holdout 75% -> 83.3%. +2.5 MB binary; model is never downloaded by agentgrep. |
+| tree-sitter structure for Go, Java, C, C++, C#, Ruby, PHP, Kotlin, Swift | `--features treesitter` | Go and Java hit@1 0% -> 85-95%. Binary 3.8 MB -> 24.5 MB. |
 
-Every step must keep the rg parity benchmark at 54/54 and add a ranking-quality benchmark.
+Invariants kept: semantic is a re-ranker only (never adds or drops a file);
+files passing the original strict subject gate are always scored; rg parity
+36/36 (synthetic + jcode corpora; the Linux corpus was not available).
+
+### Running the benchmarks
+
+```bash
+AGENTGREP_BENCH_ROOT=/path/to/qin-code@430b840 \
+  cargo test --release --test ranking_bench -- --ignored --nocapture
+python3 scripts/lang_corpus_check.py target/release/agentgrep /path/to/gin go 40
+python3 scripts/ranking_latency.py OLD_BIN NEW_BIN /path/to/corpus 5
+```
+
+## Not done yet
+
+- Holdout natural-language queries still miss when the code uses different
+  words than the query ("convert web page to markdown" vs `html_to_markdown`).
+  A code-trained embedding model or query expansion would be the next step.
+- tree-sitter is not used for Rust/TS/JS/Python; their line-based extractors
+  already score well on the bench and switching would need its own measurement.
