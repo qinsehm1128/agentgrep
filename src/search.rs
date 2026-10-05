@@ -364,21 +364,8 @@ fn run_rg_paths_only(root: &Path, args: &GrepArgs) -> Result<Option<Vec<RgDispla
         Err(err) => return Err(format!("failed to execute rg: {err}")),
     };
 
-    match output.status.code() {
-        // Exit 2 with results on stdout means rg hit per-file errors (for
-        // example broken symlinks with --follow) but still searched the rest;
-        // treat the partial output as authoritative. Exit 2 with no output is
-        // ambiguous (could be a fatal error), so fall back to the native path.
-        Some(0) | Some(1) => {}
-        Some(2) if !output.stdout.is_empty() => {}
-        Some(2) => return Ok(None),
-        Some(code) => {
-            return Err(format!(
-                "rg failed with exit code {code}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        None => return Err("rg terminated by signal".to_string()),
+    if classify_rg_exit(&output)? == RgExit::Fallback {
+        return Ok(None);
     }
 
     // Keep the raw bytes from rg's NUL-separated output: sort on them so tie
@@ -469,14 +456,34 @@ fn run_rg_output(mut command: Command) -> Result<Option<std::process::Output>, S
         Err(err) => return Err(format!("failed to execute rg: {err}")),
     };
 
+    match classify_rg_exit(&output)? {
+        RgExit::Use => Ok(Some(output)),
+        RgExit::Fallback => Ok(None),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RgExit {
+    /// rg searched; its stdout is authoritative.
+    Use,
+    /// rg could not search here; use the native path instead.
+    Fallback,
+}
+
+fn classify_rg_exit(output: &std::process::Output) -> Result<RgExit, String> {
     match output.status.code() {
-        Some(0) | Some(1) => Ok(Some(output)),
+        Some(0) | Some(1) => Ok(RgExit::Use),
         // Exit 2 with results on stdout means rg hit per-file errors (for
         // example broken symlinks with --follow) but still searched the rest.
         // Exit 2 with no output is ambiguous (could be a fatal error such as a
-        // bad pattern), so return None to fall back to the native path.
-        Some(2) if !output.stdout.is_empty() => Ok(Some(output)),
-        Some(2) => Ok(None),
+        // bad pattern), so fall back to the native path.
+        Some(2) if !output.stdout.is_empty() => Ok(RgExit::Use),
+        Some(2) => Ok(RgExit::Fallback),
+        // rg itself only exits 0, 1 or 2. 127 is "command not found": a binary
+        // linked against old glibc symbols (glibc < 2.24 `posix_spawn`) cannot
+        // report the missing program as an ENOENT spawn error, so the child
+        // exits 127 instead. That is rg being absent, not rg failing.
+        Some(127) if output.stdout.is_empty() => Ok(RgExit::Fallback),
         Some(code) => Err(format!(
             "rg failed with exit code {code}: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -1088,6 +1095,28 @@ mod tests {
     use crate::cli::GrepArgs;
     use std::fs;
     use tempfile::tempdir;
+
+    #[cfg(unix)]
+    fn rg_output(code: i32, stdout: &[u8]) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: stdout.to_vec(),
+            stderr: Vec::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rg_exit_127_without_output_falls_back_to_native() {
+        assert_eq!(classify_rg_exit(&rg_output(127, b"")), Ok(RgExit::Fallback));
+        assert_eq!(classify_rg_exit(&rg_output(0, b"a")), Ok(RgExit::Use));
+        assert_eq!(classify_rg_exit(&rg_output(1, b"")), Ok(RgExit::Use));
+        assert_eq!(classify_rg_exit(&rg_output(2, b"a")), Ok(RgExit::Use));
+        assert_eq!(classify_rg_exit(&rg_output(2, b"")), Ok(RgExit::Fallback));
+        assert!(classify_rg_exit(&rg_output(127, b"a")).is_err());
+        assert!(classify_rg_exit(&rg_output(3, b"")).is_err());
+    }
 
     fn grep_args(query: &str) -> GrepArgs {
         GrepArgs {
